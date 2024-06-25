@@ -75,27 +75,33 @@ app.post("/search", Data.any("files"), async (req, res) => {
       const base64Data = img.replace(/^data:image\/png;base64,/, "");
       const binaryData = Buffer.from(base64Data, "base64");
       const filePath = path.join(__dirname, output_path);
-      fs.writeFile(filePath, binaryData, (err) => {
+      fs.writeFile(filePath, binaryData, async (err) => {
         if (err) {
           console.error("Failed to save the image:", err);
         } else {
           console.log("Image saved successfully at:", filePath);
+          const [result] = await client.webDetection(filePath);
+          const webDetection = result.webDetection;
+          console.log(webDetection);
+
+          if (webDetection.pagesWithMatchingImages.length > 0) {
+            res.render("index.ejs", {
+              pages: webDetection.pagesWithMatchingImages,
+              images: webDetection.fullMatchingImages,
+              getMainDomain,
+            });
+          } else {
+            const [newResult] = await client.webDetection(
+              webDetection.visuallySimilarImages?.[0]?.url
+            );
+            const newWebDetection = newResult.webDetection;
+            res.render("index.ejs", {
+              pages: newWebDetection.pagesWithMatchingImages,
+              images: newWebDetection.fullMatchingImages,
+              getMainDomain,
+            });
+          }
         }
-      });
-      const [result] = await client.webDetection(output_path);
-      const webDetection = result.webDetection;
-      let images = [];
-      if (webDetection.fullMatchingImages.length > 0) {
-        images = webDetection.fullMatchingImages;
-      } else if (webDetection.partialMatchingImages.length > 0) {
-        images = webDetection.partialMatchingImages;
-      } else if (webDetection.visuallySimilarImages.length > 0) {
-        images = webDetection.visuallySimilarImages;
-      }
-      res.render("index.ejs", {
-        pages: webDetection.pagesWithMatchingImages,
-        images: webDetection.fullMatchingImages,
-        getMainDomain,
       });
     } catch (error) {
       console.log(error);
