@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Product-searchextension</title>
+    <title>Product Search Results</title>
     <style>
       html {
         box-sizing: border-box;
@@ -18,107 +18,149 @@
         height: 100%;
       }
       body {
-        background: white;
-        font-family: "Roboto", sans-serif;
-      }
-      * {
+        background: #0d1117;
+        color: #e6edf3;
+        font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
         margin: 0;
         padding: 0;
-        box-sizing: border-box;
-      }
-      .web-similar-pages {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-      }
-
-      h1 {
-        margin-top: 1rem;
-      }
-
-      .card {
-        width: 800px;
-        height: 8rem;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        overflow: hidden;
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-        display: flex;
-        padding: 1rem;
-      }
-
-      .card-info {
-        display: flex;
-        flex-direction: column;
-        flex-grow: 1;
-        justify-content: start;
-      }
-
-      .product-website {
-        background-color: rgb(199, 108, 75);
-        color: white;
-        margin-right: auto;
-        padding: .1rem .5rem;
-        border-radius: 8px;
-        margin-left: .3rem;
       }
 
       a {
-        text-decoration: none;
-        margin: 0.5rem;
-        display: inline-block;
-        text-decoration: none;
         color: inherit;
-      }
-
-      .card img {
-        width: 6rem;
-        height: 6rem;
-        display: block;
-        object-fit: cover;
-        margin-left: auto;
-        border-radius: 5px;
-      }
-
-      .card h2 {
-        font-size: 1.2rem;
-
-        padding: 5px;
-        margin: 10px 0;
-        color: #333;
         text-decoration: none;
+      }
+
+      .page {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 2rem 1.5rem 3rem;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+      }
+
+      .title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      .meta {
+        color: #9ba4b5;
+        font-size: 0.95rem;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 1rem;
+      }
+
+      .card {
+        display: grid;
+        grid-template-columns: 1fr 96px;
+        padding: 1rem;
+        border-radius: 12px;
+        border: 1px solid #1f2630;
+        background: linear-gradient(145deg, #0f1623 0%, #0b1020 100%);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+        transition: transform 160ms ease, border-color 160ms ease;
       }
 
       .card:hover {
-        transform: translateY(-5px);
-        transition: transform 0.3s ease;
+        transform: translateY(-3px);
+        border-color: #2a7de1;
+      }
+
+      .card h2 {
+        font-size: 1.05rem;
+        line-height: 1.4;
+        margin: 0 0 0.35rem 0;
+      }
+
+      .product-website {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        background: rgba(42, 125, 225, 0.12);
+        color: #9fc6ff;
+        border: 1px solid rgba(42, 125, 225, 0.35);
+        padding: 0.15rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.82rem;
+      }
+
+      .card img,
+      .image-placeholder {
+        width: 88px;
+        height: 88px;
+        border-radius: 10px;
+        object-fit: cover;
+        border: 1px solid #1f2630;
+      }
+
+      .image-placeholder {
+        display: grid;
+        place-items: center;
+        color: #9ba4b5;
+        font-size: 0.75rem;
+        background: rgba(255, 255, 255, 0.02);
+        border-style: dashed;
+      }
+
+      .empty {
+        margin-top: 2rem;
+        padding: 1rem 1.25rem;
+        border-radius: 12px;
+        border: 1px dashed #2a7de1;
+        background: rgba(42, 125, 225, 0.08);
+        color: #c4d9ff;
       }
     </style>
   </head>
   <body>
-    <div class="web-similar-pages">
-      <h1>Similar Products</h1>
-      <% let cnt = 0; %> <% if (pages && pages.length > 0) { %> <%
-      pages.forEach(function(page) {%>
-
-      <a href="<%= page.url %>"
-        ><div class="card">
-          <div class="card-info">
-            <h2><%= page.pageTitle %></h2>
-            <span class="product-website"><%= getMainDomain(page.url) %></span>
+    <div class="page">
+      <header>
+        <div>
+          <div class="title">Visually Similar Products</div>
+          <div class="meta">
+            <%= pages?.length || 0 %> matches found
           </div>
-          <img
-            src="<%=page.fullMatchingImages.length>0?page.fullMatchingImages[0].url:page.partialMatchingImages[0].url%>"
-            alt="<%= page.title %>"
-          /></div
-      ></a>
+        </div>
+      </header>
 
-      <% }); %> <% } else { %>
-      <p>No entries found.</p>
+      <% if (pages && pages.length > 0) { %>
+        <div class="grid">
+          <% pages.forEach(function (page) { 
+               const matchingImage =
+                 (page.fullMatchingImages && page.fullMatchingImages[0]) ||
+                 (page.partialMatchingImages && page.partialMatchingImages[0]);
+          %>
+            <a href="<%= page.url %>" target="_blank" rel="noopener noreferrer">
+              <div class="card">
+                <div class="card-info">
+                  <h2><%= page.pageTitle || getMainDomain(page.url) %></h2>
+                  <span class="product-website">↗ <%= getMainDomain(page.url) %></span>
+                </div>
+                <% if (matchingImage) { %>
+                  <img src="<%= matchingImage.url %>" alt="<%= page.pageTitle || 'Product preview' %>" />
+                <% } else { %>
+                  <div class="image-placeholder">Preview unavailable</div>
+                <% } %>
+              </div>
+            </a>
+          <% }); %>
+        </div>
+      <% } else { %>
+        <div class="empty">
+          <strong><%= message || 'No visually similar products were found.' %></strong>
+          <div style="margin-top: 0.35rem; color: #9ba4b5;">Try a clearer crop or another angle of the product.</div>
+        </div>
       <% } %>
     </div>
-    <script>
-      console.log(typeof "<%= pages.fullMatchingImages %>");
-    </script>
   </body>
 </html>

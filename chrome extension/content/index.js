@@ -1,5 +1,18 @@
 var jcrop, selection;
 
+var cleanupOverlay = () => {
+  overlay(false);
+  if (jcrop) {
+    try {
+      jcrop.destroy();
+    } catch (e) {}
+    jcrop = null;
+  }
+  selection = null;
+  $("#fake-image").remove();
+  $(".jcrop-holder").remove();
+};
+
 var overlay = ((active) => (state) => {
   active =
     typeof state === "boolean" ? state : state === null ? active : !active;
@@ -52,6 +65,8 @@ var init = (done) => {
 
 var capture = (force) => {
   chrome.storage.sync.get((config) => {
+    const delay = Number(config.delay || 150);
+    const maxScrolls = Number(config.maxScrolls || 30);
     if (
       selection &&
       (config.method === "crop" || (config.method === "wait" && force))
@@ -82,6 +97,7 @@ var capture = (force) => {
                   config.dialog
                 );
                 selection = null;
+                setTimeout(cleanupOverlay, 100);
               }
             );
           }
@@ -107,6 +123,7 @@ var capture = (force) => {
               (image) => {
                 save(
                   image,
+              setTimeout(cleanupOverlay, 100);
                   config.format,
                   config.save,
                   config.clipboard,
@@ -119,7 +136,7 @@ var capture = (force) => {
               res.image,
               config.format,
               config.save,
-              config.clipboard,
+          setTimeout(() => {
               config.dialog
             );
           }
@@ -143,7 +160,8 @@ var capture = (force) => {
             {
               message: "capture",
               format: config.format,
-              quality: config.quality,
+                    count * innerHeight > container.scrollTop ||
+                    count >= maxScrolls
             },
             (res) => {
               var height = innerHeight;
@@ -156,7 +174,7 @@ var capture = (force) => {
                 image: res.image,
               });
 
-              if (
+                  }, delay);
                 (count * innerHeight === container.scrollTop &&
                   (count - 1) * innerHeight === container.scrollTop) ||
                 count * innerHeight > container.scrollTop
@@ -183,10 +201,11 @@ var capture = (force) => {
             w: innerWidth,
             h: images.reduce((all, { height }) => (all += height), 0),
           };
+                  setTimeout(cleanupOverlay, 120);
           crop(
             images,
             area,
-            devicePixelRatio,
+          }, delay);
             config.scaling,
             config.format,
             (image) => {
@@ -223,7 +242,6 @@ var filename = (format) => {
 };
 
 var save = (image, format, save, clipboard, dialog) => {
-  console.log(image);
   if (save.includes("file")) {
     var link = document.createElement("a");
     link.download = filename(format);
@@ -305,6 +323,11 @@ chrome.runtime.onMessage.addListener((req, sender, res) => {
       overlay();
       capture(true);
     }
+  } else if (req.message === "notify") {
+    if (req.text) {
+      alert(req.text);
+    }
+    res && res({});
   }
   return true;
 });

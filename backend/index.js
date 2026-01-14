@@ -3,113 +3,174 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const multer = require("multer");
 const vision = require("@google-cloud/vision");
-require("dotenv").config();
-const CREDENTIALS = JSON.parse(
-  JSON.stringify({
-    type: process.env.TYPE,
-    project_id: process.env.PROJECT_ID,
-    private_key_id: process.env.PRIVATE_KEY_ID,
-    private_key: process.env.PRIVATE_KEY,
-    client_email: process.env.CLIENT_EMAIL,
-    client_id: process.env.CLIENT_ID,
-    auth_uri: process.env.AUTH_URI,
-    token_uri: process.env.TOKEN_URI,
-    auth_provider_x509_cert_url: process.env.AUTH_PROVIDER_CERT,
-    client_x509_cert_url: process.env.CLIENT_CERT,
-    universe_domain: process.env.UNIVERSE_DOMAIN,
-  })
-);
-const fs = require("fs");
 const path = require("path");
+require("dotenv").config();
 
-const CONFIG = {
+const {
+  normalizePrivateKey,
+  getMainDomain,
+  buildRenderPayload,
+  validateDataUrlImage,
+  selectFallbackImage,
+} = require("./lib/webDetection");
+
+const requiredEnvVars = ["PROJECT_ID", "CLIENT_EMAIL", "PRIVATE_KEY"];
+const missingEnvVars = requiredEnvVars.filter((key) => !process.env[key]);
+
+if (missingEnvVars.length) {
+  throw new Error(
+    `Missing Google Vision credentials: ${missingEnvVars.join(", ")}`
+  );
+}
+
+const MAX_IMAGE_BYTES = Number(process.env.MAX_IMAGE_BYTES) || 5 * 1024 * 1024; // 5MB
+const ALLOWED_MIME_TYPES = (process.env.ALLOWED_MIME_TYPES || "image/png,image/jpeg,image/jpg")
+  .split(",")
+  .map((type) => type.trim())
+  .filter(Boolean);
+const REQUEST_TIMEOUT_MS = Number(process.env.VISION_TIMEOUT_MS) || 8000;
+const MAX_RETRIES = Number(process.env.VISION_MAX_RETRIES) || 1;
+
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const client = new vision.ImageAnnotatorClient({
+  projectId: process.env.PROJECT_ID,
   credentials: {
-    private_key: CREDENTIALS.private_key,
-    client_email: CREDENTIALS.client_email,
+    client_email: process.env.CLIENT_EMAIL,
+    private_key: normalizePrivateKey(process.env.PRIVATE_KEY),
   },
-};
-const client = new vision.ImageAnnotatorClient(CONFIG);
+});
 
 const app = express();
 
-app.use(bodyParser.json());
-app.use(cors());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static("public"));
+app.set("view engine", "ejs");
+app.set("views", path.join(__dirname, "views"));
+
+app.use(
+  cors(
+    allowedOrigins.length
+      ? { origin: allowedOrigins }
+      : undefined
+  )
+);
+app.use(bodyParser.json({ limit: "50kb" }));
+app.use(bodyParser.urlencoded({ extended: true, limit: "10mb" }));
+
+const upload = multer({ limits: { fieldSize: MAX_IMAGE_BYTES + 1024 } });
+
+const apiKey = process.env.API_KEY;
+const requireApiKey = (req, res, next) => {
+  if (!apiKey) return next();
+  const providedKey = req.header("x-api-key");
+  if (providedKey && providedKey === apiKey) {
+    return next();
+  }
+  return res.status(401).json({ message: "Unauthorized" });
+};
+
+const withTimeout = (promise, ms) => {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error("Vision request timed out"));
+      }, ms);
+    }),
+  ]);
+};
+
+const runWithRetry = async (fn, maxRetries) => {
+  let attempt = 0;
+  let lastError;
+  while (attempt <= maxRetries) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      attempt += 1;
+      if (attempt > maxRetries) {
+        throw lastError;
+      }
+    }
+  }
+  throw lastError;
+};
+
+const detectWeb = async (imagePayload) => {
+  const request = imagePayload.content
+    ? { image: { content: imagePayload.content } }
+    : { image: { source: { imageUri: imagePayload.imageUri } } };
+
+  return runWithRetry(
+    () =>
+      withTimeout(
+        client.webDetection(request).then(([result]) => result.webDetection || {}),
+        REQUEST_TIMEOUT_MS
+      ),
+    MAX_RETRIES
+  );
+};
+
 app.get("/", (req, res) => {
   res.json({ message: "Server is working..." });
 });
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, __dirname + "/uploads");
-  },
-  filename: (req, file, cb) => {
-    cb(null, file.originalname);
-  },
-});
+app.post("/search", requireApiKey, upload.none(), async (req, res) => {
+  const imagePayload = req?.body?.image;
 
-const Data = multer({ storage: storage });
-
-function getMainDomain(url) {
-  const hostname = new URL(url).hostname;
-  const parts = hostname.split(".");
-  if (parts.length >= 3) {
-    const tld = parts.slice(-2).join(".");
-    const domain = parts.slice(-3).join(".");
-    if (tld.length === 2) {
-      return parts.slice(-3).join(".");
-    } else {
-      return parts.slice(-2).join(".");
-    }
+  if (!imagePayload) {
+    return res.status(400).json({ message: "Image data is required" });
   }
-  return hostname;
-}
 
-app.post("/search", Data.any("files"), async (req, res) => {
-  const img = req?.body?.image;
+  const validation = validateDataUrlImage(imagePayload, {
+    allowedMimeTypes: ALLOWED_MIME_TYPES,
+    maxSizeBytes: MAX_IMAGE_BYTES,
+  });
 
-  if (res.status(200)) {
-    try {
-      const output_path = "image.png";
-      const base64Data = img.replace(/^data:image\/png;base64,/, "");
-      const binaryData = Buffer.from(base64Data, "base64");
-      const filePath = path.join(__dirname, output_path);
-      fs.writeFile(filePath, binaryData, async (err) => {
-        if (err) {
-          console.error("Failed to save the image:", err);
-        } else {
-          console.log("Image saved successfully at:", filePath);
-          const [result] = await client.webDetection(filePath);
-          const webDetection = result.webDetection;
-          console.log(webDetection);
+  if (!validation.ok) {
+    return res.status(400).json({ message: validation.error });
+  }
 
-          if (webDetection.pagesWithMatchingImages.length > 0) {
-            res.render("index.ejs", {
-              pages: webDetection.pagesWithMatchingImages,
-              images: webDetection.fullMatchingImages,
-              getMainDomain,
-            });
-          } else {
-            const [newResult] = await client.webDetection(
-              webDetection.visuallySimilarImages?.[0]?.url
-            );
-            const newWebDetection = newResult.webDetection;
-            res.render("index.ejs", {
-              pages: newWebDetection.pagesWithMatchingImages,
-              images: newWebDetection.fullMatchingImages,
-              getMainDomain,
-            });
-          }
-        }
+  try {
+    let webDetection = await detectWeb({ content: validation.buffer });
+    let payload = buildRenderPayload(webDetection);
+
+    if (!payload.pages.length) {
+      const fallbackUrl = selectFallbackImage(webDetection);
+      if (fallbackUrl) {
+        webDetection = await detectWeb({ imageUri: fallbackUrl });
+        payload = buildRenderPayload(webDetection);
+      }
+    }
+
+    if (!payload.pages.length) {
+      return res.status(200).render("index", {
+        pages: [],
+        images: [],
+        message: "No visually similar products were found.",
+        getMainDomain,
       });
-    } catch (error) {
-      console.log(error);
-      res.json({ message: "Some err" });
     }
+
+    return res.status(200).render("index", {
+      ...payload,
+      message: null,
+      getMainDomain,
+    });
+  } catch (error) {
+    console.error("Failed to process the image", error);
+    return res.status(500).json({ message: "Unable to process the image" });
   }
 });
 
-app.listen(3000, () => {
-  console.log(`App listening on port 3000`);
+const PORT = Number(process.env.PORT) || 3000;
+
+app.listen(PORT, () => {
+  console.log(`App listening on port ${PORT}`);
 });
+
+module.exports = { app, detectWeb };

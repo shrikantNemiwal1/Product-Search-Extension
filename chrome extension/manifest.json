@@ -37,5 +37,6 @@
       }
     }
   },
-  "permissions": ["storage", "scripting", "activeTab"]
+  "permissions": ["storage", "scripting", "activeTab", "tabs"],
+  "host_permissions": ["http://localhost:3000/*", "https://localhost:3000/*"]
 }

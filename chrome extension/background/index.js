@@ -1,29 +1,4 @@
-// chrome.storage.sync.clear()
-async function postData(image) {
-  try {
-    const formData = new FormData();
-    formData.append("image", image);
-    const response = await fetch("http://localhost:3000/search", {
-      method: "POST",
-      body: formData,
-    });
-    const htmlContent = await response.text();
-    chrome.tabs.create({
-      url: "data:text/html;charset=utf-8," + encodeURIComponent(htmlContent),
-    });
-  } catch (error) {
-    console.log("Error:", error);
-  }
-}
-
-chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
-  if (request.type === "search") {
-    console.log(request);
-    postData(request.image);
-  }
-});
-
-var defaults = {
+const defaults = {
   method: "crop",
   format: "png",
   quality: 100,
@@ -32,10 +7,14 @@ var defaults = {
   clipboard: "url",
   dialog: true,
   icon: "default",
+  endpoint: "http://localhost:3000/search",
+  requestTimeout: 10000,
+  delay: 150,
+  maxScrolls: 30,
 };
 
-chrome.storage.sync.get((store) => {
-  var config = {};
+const hydrateConfig = (store) => {
+  const config = {};
   Object.assign(config, defaults, JSON.parse(JSON.stringify(store)));
   if (typeof config.save === "string") {
     config.clipboard = /url|binary/.test(config.save) ? config.save : "url";
@@ -48,17 +27,92 @@ chrome.storage.sync.get((store) => {
   if (typeof config.icon === "boolean") {
     config.icon = config.icon === false ? "default" : "light";
   }
-  chrome.storage.sync.set(config);
+  if (!config.endpoint) {
+    config.endpoint = defaults.endpoint;
+  }
+  if (!config.requestTimeout) {
+    config.requestTimeout = defaults.requestTimeout;
+  }
+  return config;
+};
 
-  chrome.action.setIcon({
-    path: [16, 19, 38, 48, 128].reduce(
-      (all, size) => (
-        (all[size] = `/icons/${config.icon}/${size}x${size}.png`), all
+const cacheConfig = (config) =>
+  chrome.storage.sync.set(config, () => {
+    chrome.action.setIcon({
+      path: [16, 19, 38, 48, 128].reduce(
+        (all, size) => (
+          (all[size] = `/icons/${config.icon}/${size}x${size}.png`), all
+        ),
+        {}
       ),
-      {}
-    ),
+    });
   });
+
+const getConfig = () =>
+  new Promise((resolve) => {
+    chrome.storage.sync.get((store) => {
+      const cfg = hydrateConfig(store);
+      cacheConfig(cfg);
+      resolve(cfg);
+    });
+  });
+
+const notifyActiveTab = (message) => {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const active = tabs[0];
+    if (!active) return;
+    chrome.tabs.sendMessage(active.id, { message: "notify", text: message }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn("notify fallback", chrome.runtime.lastError.message);
+      }
+    });
+  });
+};
+
+const openHtmlTab = (htmlContent) => {
+  chrome.tabs.create({
+    url: "data:text/html;charset=utf-8," + encodeURIComponent(htmlContent),
+  });
+};
+
+async function postData(image) {
+  const config = await getConfig();
+  const formData = new FormData();
+  formData.append("image", image);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.requestTimeout);
+
+  try {
+    const response = await fetch(config.endpoint, {
+      method: "POST",
+      body: formData,
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      notifyActiveTab("Search failed: " + (response.statusText || "Bad response"));
+      return;
+    }
+
+    openHtmlTab(text);
+  } catch (error) {
+    notifyActiveTab("Could not reach search service. Check connection.");
+    console.error("Search error", error);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+chrome.runtime.onMessage.addListener(function (request) {
+  if (request.type === "search") {
+    postData(request.image);
+  }
 });
+
+getConfig();
 
 function inject(tab) {
   chrome.tabs.sendMessage(tab.id, { message: "init" }, (res) => {
